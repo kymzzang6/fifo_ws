@@ -1,5 +1,6 @@
-/install
-/log
-/build
-!models/**/*.pt
-models/**
+**/install
+**/log
+**/build
+**/models/**
+!**/models/**/
+!**/models/**/*.pt
