@@ -9,7 +9,7 @@ def generate_launch_description():
     # 모델 기본값 설정
     model_name_arg = DeclareLaunchArgument(
         'model_name',
-        default_value='merged_8',
+        default_value='origin1',
         description='Name of the custom YOLO model folder'
     )
     

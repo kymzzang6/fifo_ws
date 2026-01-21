@@ -16,9 +16,8 @@ class PPEMatcherNode(Node):
         super().__init__('ppe_matcher_node')
 
         # --- 1. 파라미터 ---
-        self.declare_parameter('match_threshold', 20.0) # ppe ~ pose 좌표 거리
-        self.match_threshold = self.get_parameter('match_threshold').value
-
+        # 이제 거리 threshold 대신, bbox 포함 여부를 보므로 거리 파라미터는 덜 중요해졌지만
+        # 박스를 살짝 벗어난 경우도 허용하고 싶다면 margin을 줄 수 있습니다.
         self.declare_parameter('check_list', ["helmet", "vest", "gloves"]) 
         self.check_targets = self.get_parameter('check_list').value
         
@@ -27,15 +26,13 @@ class PPEMatcherNode(Node):
         # --- 2. 구독 (3개 토픽 동기화) ---
         self.pose_sub = message_filters.Subscriber(self, PoseDetect, '/body_points')
         self.class_sub = message_filters.Subscriber(self, PPEDetect, '/class_info')
-        self.img_sub = message_filters.Subscriber(self, Image, '/image_raw') # 디버그 그리기용 원본
+        self.img_sub = message_filters.Subscriber(self, Image, '/image_raw') 
 
-        # 3개 토픽 동기화 (allow_headerless=True 추가됨)
-        # 이 옵션은 헤더가 없거나 타임스탬프가 비어있는 메시지도 
-        # 도착한 시간(ROS Time) 기준으로 동기화 해줍니다.
+        # 3개 토픽 동기화
         self.ts = message_filters.ApproximateTimeSynchronizer(
             [self.pose_sub, self.class_sub, self.img_sub], 
             queue_size=10, 
-            slop=1.0,
+            slop=0.5, # 동기화 허용 오차 (초)
             allow_headerless=True
         )
         self.ts.registerCallback(self.sync_callback)
@@ -43,7 +40,7 @@ class PPEMatcherNode(Node):
         # --- 3. 퍼블리셔 ---
         self.all_detected_pub = self.create_publisher(Bool, '/all_detected', 10)
         self.what_detected_pub = self.create_publisher(String, '/what_detected', 10)
-        self.debug_image_pub = self.create_publisher(Image, '/ppe_debug', 10) # 디버그 이미지
+        self.debug_image_pub = self.create_publisher(Image, '/ppe_debug', 10)
 
         self.bridge = CvBridge()
 
@@ -55,54 +52,74 @@ class PPEMatcherNode(Node):
             self.get_logger().error(f"CvBridge Error: {e}")
             return
 
-        # 2. PPE 파싱
+        # 2. PPE 파싱 (중심점 추출)
+        # class_msg는 [class_name, cx, cy] 정보를 담고 있다고 가정
         detected_objects = {"helmet": [], "vest": [], "gloves": [], "earplug": []}
-        for cls, cx, cy in zip(class_msg.classes, class_msg.center_xs, class_msg.center_ys):
-            cls_lower = cls.lower()
-            if "helmet" in cls_lower or "hardhat" in cls_lower:
-                detected_objects["helmet"].append((cx, cy))
-            elif "vest" in cls_lower:
-                detected_objects["vest"].append((cx, cy))
-            elif "glove" in cls_lower:
-                detected_objects["gloves"].append((cx, cy))
-            elif "ear" in cls_lower or "plug" in cls_lower:
-                detected_objects["earplug"].append((cx, cy))
+        
+        if len(class_msg.classes) > 0:
+            for cls, cx, cy in zip(class_msg.classes, class_msg.center_xs, class_msg.center_ys):
+                cls_lower = cls.lower()
+                if "helmet" in cls_lower or "hardhat" in cls_lower:
+                    detected_objects["helmet"].append((cx, cy))
+                elif "vest" in cls_lower:
+                    detected_objects["vest"].append((cx, cy))
+                elif "glove" in cls_lower:
+                    detected_objects["gloves"].append((cx, cy))
+                elif "ear" in cls_lower or "plug" in cls_lower:
+                    detected_objects["earplug"].append((cx, cy))
 
         # 3. 매칭 및 상태 체크
         status = {"helmet": False, "vest": False, "gloves": False, "earplug": False}
         
-        # 디버그 그리기 헬퍼 함수
-        def draw_line(start_pt, end_pt, color=(0, 255, 0)):
-            cv2.line(cv_image, (int(start_pt[0]), int(start_pt[1])), 
-                     (int(end_pt[0]), int(end_pt[1])), color, 2)
-
-        def check_and_draw(body_pt, target_key, label):
-            """거리 체크하고 선 그리기"""
-            if body_pt[0] == -1.0: return False
+        # --- 핵심 로직: Point in Box 확인 ---
+        def is_point_in_box(point, bbox):
+            px, py = point
+            x1, y1, x2, y2 = bbox
+            # BBox가 유효하지 않으면(-1) False
+            if x1 == -1: return False
             
-            bx, by = body_pt
-            min_dist = float('inf')
-            closest_obj = None
+            # 박스 안에 점이 있는지 확인 (경계선 포함)
+            return (x1 <= px <= x2) and (y1 <= py <= y2)
 
-            # 가장 가까운 장비 찾기
+        def check_and_draw(body_bbox, target_key, label):
+            """
+            body_bbox: [x1, y1, x2, y2]
+            target_key: 'helmet', 'vest' ...
+            """
+            # 신체 부위가 감지되지 않았으면(-1) 스킵
+            if body_bbox[0] == -1.0: 
+                return False
+            
+            x1, y1, x2, y2 = map(int, body_bbox)
+            
+            # 신체 부위 박스 그리기 (파란색)
+            cv2.rectangle(cv_image, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            
+            is_matched = False
+            matched_obj = None
+
+            # 해당 부위 박스 안에 들어오는 PPE가 있는지 검사
             for (ox, oy) in detected_objects[target_key]:
-                dist = math.hypot(bx - ox, by - oy)
-                if dist < min_dist:
-                    min_dist = dist
-                    closest_obj = (ox, oy)
+                if is_point_in_box((ox, oy), body_bbox):
+                    is_matched = True
+                    matched_obj = (int(ox), int(oy))
+                    break # 하나라도 찾으면 OK
             
-            # 매칭 성공 시 초록선, 실패 시 빨간선(혹은 안 그림)
-            is_matched = min_dist < self.match_threshold
-            
-            if is_matched and closest_obj:
-                draw_line((bx, by), closest_obj, (0, 255, 0)) # Green Line
-                cv2.putText(cv_image, f"{label}: OK", (int(bx), int(by)-10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            # 결과 표시
+            if is_matched:
+                # 매칭된 PPE 표시 (초록색 점)
+                if matched_obj:
+                    cv2.circle(cv_image, matched_obj, 8, (0, 255, 0), -1)
+                
+                # 텍스트 표시
+                cv2.putText(cv_image, f"{label}: OK", (x1, y1 - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                # 박스 색상을 초록으로 덧칠
+                cv2.rectangle(cv_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
             else:
-                # 매칭 실패해도 신체 부위는 표시
-                cv2.circle(cv_image, (int(bx), int(by)), 5, (0, 0, 255), -1)
-                cv2.putText(cv_image, f"{label}: X", (int(bx), int(by)-10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                # 매칭 실패 (빨간색 텍스트)
+                cv2.putText(cv_image, f"{label}: Missing", (x1, y1 - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             
             return is_matched
 
@@ -116,26 +133,31 @@ class PPEMatcherNode(Node):
         l_ok = check_and_draw(pose_msg.hand_left, "gloves", "L_Glove")
         r_ok = check_and_draw(pose_msg.hand_right, "gloves", "R_Glove")
         
-        # 손이 안 보이면 False, 하나라도 보이면 그 손에 대한 결과 반영
+        # 로직: 손이 화면에 안 보이면(-1) '검사 제외(Pass)'로 칠지, '불합격'으로 칠지 결정해야 함.
+        # 여기서는 "화면에 보이는 손은 반드시 장갑을 껴야 한다"는 로직 적용
+        
+        # 왼손 검사: 안보이면 True(통과), 보이면 l_ok 결과 따름
+        l_check = True if pose_msg.hand_left[0] == -1 else l_ok
+        # 오른손 검사
+        r_check = True if pose_msg.hand_right[0] == -1 else r_ok
+        
+        # 양손 다 안 보이면 -> False (작업자가 없는 것으로 간주하거나, 상황에 따라 True로 변경 가능)
         if pose_msg.hand_left[0] == -1 and pose_msg.hand_right[0] == -1:
-            status["gloves"] = False
+            status["gloves"] = False 
         else:
-            # 보이는 손은 다 착용해야 OK (한쪽만 보이면 그 쪽만 체크)
-            # 로직: (왼손안보임 OR 왼손착용) AND (오른손안보임 OR 오른손착용)
-            l_check = (pose_msg.hand_left[0] == -1) or l_ok
-            r_check = (pose_msg.hand_right[0] == -1) or r_ok
             status["gloves"] = l_check and r_check
 
-        # (4) Ears ↔ Earplugs
+        # (4) Ears ↔ Earplugs (같은 로직)
         el_ok = check_and_draw(pose_msg.ear_left, "earplug", "L_Ear")
         er_ok = check_and_draw(pose_msg.ear_right, "earplug", "R_Ear")
         
         if pose_msg.ear_left[0] == -1 and pose_msg.ear_right[0] == -1:
-            status["earplug"] = False
+            status["earplug"] = False # 귀가 아예 안 보이면 검사 불가
         else:
-            el_check = (pose_msg.ear_left[0] == -1) or el_ok
-            er_check = (pose_msg.ear_right[0] == -1) or er_ok
+            el_check = True if pose_msg.ear_left[0] == -1 else el_ok
+            er_check = True if pose_msg.ear_right[0] == -1 else er_ok
             status["earplug"] = el_check and er_check
+
 
         # 4. 결과 퍼블리시
         detected_list = [k for k, v in status.items() if v]
@@ -145,6 +167,7 @@ class PPEMatcherNode(Node):
 
         all_safe = True
         for target in self.check_targets:
+            # 타겟 리스트에 있는 항목 중 하나라도 False면 불합격
             if target in status and not status[target]:
                 all_safe = False
                 break
@@ -153,10 +176,14 @@ class PPEMatcherNode(Node):
         msg_bool.data = all_safe
         self.all_detected_pub.publish(msg_bool)
 
-        # 5. 디버그 이미지 발행 (화면에 전체 결과 표시)
+        # 5. 디버그 이미지 발행
         color = (0, 255, 0) if all_safe else (0, 0, 255)
-        text = "ALL SAFE" if all_safe else "UNSAFE"
-        cv2.putText(cv_image, text, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.5, color, 3)
+        text = "SAFE" if all_safe else "UNSAFE"
+        
+        # 화면 상단에 상태 표시 바 그리기
+        cv2.rectangle(cv_image, (0, 0), (cv_image.shape[1], 40), (0,0,0), -1)
+        cv2.putText(cv_image, f"Status: {text}", (10, 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
         
         self.debug_image_pub.publish(self.bridge.cv2_to_imgmsg(cv_image, "bgr8"))
 

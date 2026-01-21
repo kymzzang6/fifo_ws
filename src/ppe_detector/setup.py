@@ -30,6 +30,7 @@ setup(
             'ppe_node = ppe_detector.ppe_detector:main',
             'pose_node = ppe_detector.pose_detector:main',
             'decision_node = ppe_detector.decision_maker:main',
+            'total_detector_node = ppe_detector.total_detector:main',
             
         ],
     },
