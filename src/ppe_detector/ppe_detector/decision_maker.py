@@ -18,7 +18,7 @@ class PPEMatcherNode(Node):
         # --- 1. 파라미터 ---
         # 이제 거리 threshold 대신, bbox 포함 여부를 보므로 거리 파라미터는 덜 중요해졌지만
         # 박스를 살짝 벗어난 경우도 허용하고 싶다면 margin을 줄 수 있습니다.
-        self.declare_parameter('check_list', ["helmet", "vest", "gloves"]) 
+        self.declare_parameter('check_list', ["helmet", "vest", "gloves", "earplug", "hand"]) 
         self.check_targets = self.get_parameter('check_list').value
         
         self.get_logger().info(f"Check List: {self.check_targets}")
