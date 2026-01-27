@@ -31,6 +31,7 @@ setup(
             'pose_node = ppe_detector.pose_detector:main',
             'decision_node = ppe_detector.decision_maker:main',
             'total_detector_node = ppe_detector.total_detector:main',
+            'camera_open_node = ppe_detector.camera_open:main',
             
         ],
     },
