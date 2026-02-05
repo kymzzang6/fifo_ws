@@ -1,6 +1,8 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.executors import MultiThreadedExecutor   # [추가] 멀티스레드 실행기
+from rclpy.callback_groups import ReentrantCallbackGroup # [추가] 재진입 가능한 콜백 그룹
 from sensor_msgs.msg import Image
 from std_msgs.msg import String, Bool
 from cv_bridge import CvBridge
@@ -18,9 +20,9 @@ class TotalDetector(Node):
         self.declare_parameter('pose_model', 'yolo11n-pose.pt')
         self.declare_parameter('ppe_model', 'models/yolo26n_model/origin2/weights/best.pt')
         self.declare_parameter('target_width', 640)
-        self.declare_parameter('skip_frame', 1)       # 프레임 스킵 (2~4 권장)
+        self.declare_parameter('skip_frame', 1)       # 프레임 스킵
         self.declare_parameter('enable_debug', True)
-        self.declare_parameter('ppe_conf', 0.5)      # 신뢰도 약간 낮춤 (검출률 확보)
+        self.declare_parameter('ppe_conf', 0.5)      
         self.declare_parameter('use_tensorrt', False)
         
         # ==================== 디바이스 설정 ====================
@@ -42,13 +44,18 @@ class TotalDetector(Node):
             self.pose_model = YOLO(pose_path)
             self.ppe_model = YOLO(ppe_path)
             
-            # Fuse 연산 (PyTorch 모델의 경우 Conv+BN 레이어 병합으로 속도 향상)
+            # 모델을 명시적으로 GPU로 이동 (확실하게 하기 위함)
+            self.pose_model.to(self.device)
+            self.ppe_model.to(self.device)
+            
+            # Fuse 연산
             if not use_trt:
                 self.get_logger().info("⚡ Fusing layers for speed...")
-                # self.pose_model.fuse() # YOLOv11/v8은 로드 시 자동 fuse 될 수 있으나 명시 가능
+                # self.pose_model.fuse() 
                 
-            # 웜업
+            # 웜업 (Warm-up)
             dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+            # 첫 실행으로 메모리 할당 및 초기화
             self.pose_model(dummy, device=self.device, half=self.use_half, verbose=False)
             self.ppe_model(dummy, device=self.device, half=self.use_half, verbose=False)
             self.get_logger().info("✅ Models Loaded & Warmed Up")
@@ -58,19 +65,28 @@ class TotalDetector(Node):
             raise e
 
         # ==================== ROS 통신 ====================
-        # Best Effort 필수 (영상 끊김 방지)
+        # [핵심] 병렬 처리를 위한 콜백 그룹 생성
+        # 이 그룹에 속한 콜백들은 여러 스레드에서 동시에 실행될 수 있음
+        self.cb_group = ReentrantCallbackGroup()
+        
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=1
         )
 
-        self.sub = self.create_subscription(Image, '/image_raw', self.img_callback, qos_profile)
+        # [핵심] Subscription에 callback_group 지정
+        self.sub = self.create_subscription(
+            Image, 
+            '/image_raw', 
+            self.img_callback, 
+            qos_profile,
+            callback_group=self.cb_group  # <--- 여기 추가됨
+        )
         
-        # Publisher (Queue size 줄임)
-        self.pub_debug = self.create_publisher(Image, '/ppe_debug', 2)
-        self.pub_status = self.create_publisher(String, '/what_detected', 5)
-        self.pub_safe = self.create_publisher(Bool, '/all_detected', 5)
+        self.pub_debug = self.create_publisher(Image, '/ppe_debug', 2, callback_group=self.cb_group)
+        self.pub_status = self.create_publisher(String, '/what_detected', 5, callback_group=self.cb_group)
+        self.pub_safe = self.create_publisher(Bool, '/all_detected', 5, callback_group=self.cb_group)
 
         self.bridge = CvBridge()
         
@@ -89,22 +105,19 @@ class TotalDetector(Node):
         self.frame_cnt = 0
         self.prev_time = time.time()
 
-    @torch.no_grad() # Gradient 계산 비활성화 (메모리/속도 최적화)
+    @torch.no_grad()
     def img_callback(self, msg):
         self.frame_cnt += 1
         
-        # [최적화 1] Bridge 변환 전 스킵 확인 (CPU 부하 대폭 감소)
         if self.frame_cnt % self.SKIP_FRAME != 0:
             return
 
         curr_time = time.time()
         
-        # [최적화 2] 이미지 변환 및 리사이징
         try:
             cv_img = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
             h, w = cv_img.shape[:2]
             
-            # 리사이즈 (필요한 경우만)
             if w != self.TARGET_WIDTH:
                 scale = self.TARGET_WIDTH / w
                 new_h = int(h * scale)
@@ -114,19 +127,15 @@ class TotalDetector(Node):
             return
 
         # ==================== 1. Pose 추론 ====================
-        # classes=[0]으로 사람만 필터링 (불필요한 객체 탐지 방지)
         pose_res = self.pose_model(cv_img, device=self.device, half=self.use_half, 
                                  verbose=False, classes=[0], max_det=1) 
-                                 # max_det=1: 가장 큰 사람 1명만 빠르게 잡기
 
         if not pose_res or not pose_res[0].boxes:
             if self.DEBUG_ENABLED:
                 self.publish_debug(cv_img, "No Person", False, 0)
             return
 
-        # 데이터 추출 (CPU 이동 최소화)
         res = pose_res[0]
-        # boxes가 텐서 상태일 수 있음. 한 번만 cpu로 이동
         boxes_cpu = res.boxes.xyxy.cpu().numpy()
         kpts_cpu = res.keypoints.xy.cpu().numpy()[0]
         confs_cpu = res.keypoints.conf.cpu().numpy()[0]
@@ -137,7 +146,6 @@ class TotalDetector(Node):
         # ==================== 2. ROI 기반 PPE 추론 ====================
         x1, y1, x2, y2 = map(int, p_bbox)
         
-        # ROI 클램핑 (이미지 범위 벗어나지 않게)
         margin = int((x2 - x1) * 0.15)
         ih, iw = cv_img.shape[:2]
         rx1 = max(0, x1 - margin)
@@ -145,36 +153,29 @@ class TotalDetector(Node):
         rx2 = min(iw, x2 + margin)
         ry2 = min(ih, y2 + margin)
 
-        # ROI가 너무 작으면 패스
         if (rx2 - rx1) < 10 or (ry2 - ry1) < 10:
             return
 
-        person_roi = cv_img[ry1:ry2, rx1:rx2] # Numpy slicing은 빠름 (View)
+        person_roi = cv_img[ry1:ry2, rx1:rx2]
 
-        # PPE 추론
         ppe_res = self.ppe_model(person_roi, device=self.device, half=self.use_half,
                                verbose=False, conf=self.PPE_CONF, iou=0.5)
 
-        # PPE 좌표 매핑용 딕셔너리
         detected_ppes = {"helmet": [], "vest": [], "gloves": [], "earplug": []}
         
         if ppe_res and ppe_res[0].boxes:
-            # 텐서 연산을 최대한 활용하거나, 루프를 최소화
             ppe_boxes = ppe_res[0].boxes
             clss = ppe_boxes.cls.cpu().numpy()
             xys = ppe_boxes.xyxy.cpu().numpy()
-            
             names = self.ppe_model.names
             
             for i, cls_idx in enumerate(clss):
                 cls_name = names[int(cls_idx)].lower()
                 bx1, by1, bx2, by2 = xys[i]
                 
-                # Global 좌표 변환
                 cx = (bx1 + bx2) / 2 + rx1
                 cy = (by1 + by2) / 2 + ry1
                 
-                # 문자열 포함 검사 최적화
                 if "helmet" in cls_name or "hard" in cls_name:
                     detected_ppes["helmet"].append((cx, cy))
                 elif "vest" in cls_name:
@@ -184,10 +185,7 @@ class TotalDetector(Node):
                 elif "ear" in cls_name or "plug" in cls_name:
                     detected_ppes["earplug"].append((cx, cy))
 
-        # ==================== 3. 좌표 계산 및 매칭 (Pure Math) ====================
-        # (이 부분은 Numpy 연산이라 매우 빠르므로 기존 로직 유지하되 함수 호출 overhead만 제거)
-        
-        # Keypoints Helper
+        # ==================== 3. 좌표 계산 및 매칭 ====================
         def get_pt(idx): return kpts_cpu[idx] if confs_cpu[idx] > 0.5 else None
 
         pt_nose = get_pt(0)
@@ -198,17 +196,14 @@ class TotalDetector(Node):
         pt_wr_l, pt_wr_r = get_pt(9), get_pt(10)
         pt_el_l, pt_el_r = get_pt(7), get_pt(8)
 
-        # --- Coordinates Logic (Condensed) ---
         eyes_c = (pt_eye_l + pt_eye_r)/2 if (pt_eye_l is not None and pt_eye_r is not None) else None
         
-        # Head
         head_c = None
         if pt_nose is not None and eyes_c is not None:
             head_c = eyes_c + (eyes_c - pt_nose) * 2.5
         elif pt_sh_l is not None and pt_sh_r is not None:
             head_c = (pt_sh_l + pt_sh_r)/2 + [0, -p_width*0.35]
             
-        # Body
         body_c = None
         sh_c = (pt_sh_l + pt_sh_r)/2 if (pt_sh_l is not None and pt_sh_r is not None) else None
         if sh_c is not None:
@@ -217,7 +212,6 @@ class TotalDetector(Node):
             else:
                 body_c = sh_c + [0, p_width*0.25]
         
-        # Hands
         def get_hand(el, wr, is_l):
             if wr is None: return None
             if el is not None: return wr + (wr - el) * 0.4
@@ -227,7 +221,6 @@ class TotalDetector(Node):
         hl_c = get_hand(pt_el_l, pt_wr_l, True)
         hr_c = get_hand(pt_el_r, pt_wr_r, False)
 
-        # --- Matching ---
         status = {}
         
         def check(center, ratio, p_type, label, draw_img):
@@ -242,7 +235,6 @@ class TotalDetector(Node):
                     matched = True
                     break
             
-            # [최적화 3] Debug Enabled일 때만 그리기 연산 수행
             if self.DEBUG_ENABLED and draw_img is not None:
                 color = (0, 255, 0) if matched else (0, 0, 255)
                 cv2.rectangle(draw_img, (x1, y1), (x2, y2), color, 2)
@@ -272,7 +264,6 @@ class TotalDetector(Node):
         self.pub_status.publish(String(data=", ".join([k for k,v in status.items() if v])))
         self.pub_safe.publish(Bool(data=all_safe))
 
-        # FPS 계산
         dt = curr_time - self.prev_time
         fps = 1.0 / dt if dt > 0 else 0
         self.prev_time = curr_time
@@ -281,25 +272,27 @@ class TotalDetector(Node):
             self.publish_debug(cv_img, f"{'SAFE' if all_safe else 'UNSAFE'} {fps:.1f}fps", all_safe, fps)
 
     def publish_debug(self, img, text, is_safe, fps):
-        # [최적화 4] 디버그 이미지 발행 빈도 제한 (FPS가 30이어도 디버그는 15FPS만 등)
-        # 하지만 여기선 원본 싱크를 위해 매번 보내되, 인코딩 에러만 방어
         try:
             color = (0, 255, 0) if is_safe else (0, 0, 255)
             cv2.rectangle(img, (0, 0), (250, 40), (0, 0, 0), -1)
             cv2.putText(img, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
             
-            # ROI 그리기 (옵션)
-            # cv2.rectangle(img, (rx1, ry1), (rx2, ry2), (255,255,0), 1)
-
             self.pub_debug.publish(self.bridge.cv2_to_imgmsg(img, encoding="bgr8"))
         except Exception:
             pass
 
 def main(args=None):
     rclpy.init(args=args)
+    
     node = TotalDetector()
+    
+    # [핵심] MultiThreadedExecutor 사용
+    # num_threads=4: 동시에 4개의 스레드까지 사용하여 콜백 처리 (이미지 수신 / 추론 등)
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+    
     try:
-        rclpy.spin(node)
+        executor.spin() # rclpy.spin(node) 대신 executor 사용
     except KeyboardInterrupt:
         pass
     finally:
