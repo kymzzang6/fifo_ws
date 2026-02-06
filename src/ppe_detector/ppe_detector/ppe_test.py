@@ -25,7 +25,7 @@ while True:
         frame,
         stream=True,
         verbose=False,
-        conf=0.75,      # 신뢰도 낮춤 (더 많은 객체 탐지)
+        conf=0.75,      # 신뢰도 낮춤 (더 많은 객체 탐지
         iou=0.5,       # NMS IoU 임계값 (0.5: 겹침 허용 증가)
         max_det=10    # 최대 탐지 개수 (기본값 유지)
     )

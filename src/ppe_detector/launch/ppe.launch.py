@@ -13,7 +13,7 @@ def generate_launch_description():
     # Launch Arguments
     model_name_arg = DeclareLaunchArgument(
         'model_name',
-        default_value='yolo11n_model/merged_9',
+        default_value='yolo26n_model/origin3_addhand',
         description='Folder name of the custom YOLO model'
     )
     
@@ -32,7 +32,7 @@ def generate_launch_description():
         parameters=[{
             # 경로 조립: base_dir + / + model_name + /weights/best.pt
             'model_path': [base_model_dir, '/', LaunchConfiguration('model_name'), '/weights/best.pt'],
-            'conf_thres': 0.5, # 신뢰도 임계값
+            'conf_thres': 0.75, # 신뢰도 임계값
             'device': 'cuda'   # GPU 강제
         }]
     )
@@ -61,25 +61,11 @@ def generate_launch_description():
     )
 
     # 5. USB Camera Node (최적화 설정 적용됨)
-    usb_cam_node = Node(
-        package='usb_cam',
-        executable='usb_cam_node_exe',
-        name='usb_cam',
-        output='screen',
-        parameters=[{
-            'video_device': '/dev/video2',
-            'framerate': 15.0,        # [최적화] 30fps -> 15fps
-            'image_width': 320,       # [최적화] 640 -> 320
-            'image_height': 240,
-            'pixel_format': 'mjpeg2rgb', # 대역폭 절약
-            'io_method': 'mmap'
-        }]
-    )
+
 
     return LaunchDescription([
         model_name_arg,
         pose_model_path_arg,
-        usb_cam_node,
         ppe_node,
         pose_node,
         decision_node
