@@ -32,7 +32,8 @@ setup(
             'decision_node = ppe_detector.decision_maker:main',
             'total_detector_node = ppe_detector.total_detector:main',
             'camera_open_node = ppe_detector.camera_open:main',
-            
+            'total_depth_detector_node = ppe_detector.total_depth_detector:main',
+            'total_thermo_node = ppe_detector.total_thermo:main',
         ],
     },
 )

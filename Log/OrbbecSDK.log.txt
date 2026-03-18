@@ -1,0 +1,51 @@
+[03/02 15:51:22.338054][debug][25264][Context.cpp:30] Context creating, work_dir=/home/caps/fifo_ws
+[03/02 15:51:22.338161][debug][25264][Context.cpp:49] Config file version=1.1
+[03/02 15:51:22.338232][debug][25264][FrameBufferManager.cpp:23] Max global frame buffer size updated! size=2048.000MB
+[03/02 15:51:22.338246][info][25264][Context.cpp:68] Context created with config: /home/caps/fifo_ws/install/orbbec_camera/share/orbbec_camera/config/OrbbecSDKConfig_v1.0.xml
+[03/02 15:51:22.338291][info][25264][Context.cpp:73] Work directory=/home/caps/fifo_ws, SDK version=v1.10.35-20260128-fa838f5
+[03/02 15:51:22.338309][debug][25264][DeviceManager.cpp:30] DeviceManager init ...
+[03/02 15:51:22.338315][info][25264][LinuxPal.cpp:32] createObPal: create LinuxPal!
+[03/02 15:51:22.339901][debug][25264][DeviceManager.cpp:34] Enable USB Device Enumerator ...
+[03/02 15:51:22.344072][debug][25264][EnumeratorLibusb.cpp:324] queryDevicesInfo done!
+[03/02 15:51:22.344096][debug][25264][UsbDeviceEnumerator.cpp:163] Current usb device port list:
+[03/02 15:51:22.344110][debug][25264][UsbDeviceEnumerator.cpp:166]  - 1-2.3-6.0 | Orbbec(R) Astra(TM) 3D Camera(F) Depth
+[03/02 15:51:22.344114][debug][25264][UsbDeviceEnumerator.cpp:166]  - 1-2.3-6.1 | Orbbec(R) Astra(TM) Audio Devive
+[03/02 15:51:22.344369][info][25264][LinuxPal.cpp:166] Create PollingDeviceWatcher!
+[03/02 15:51:22.344423][debug][25264][UsbDeviceEnumerator.cpp:78] No matched usb device found!
+[03/02 15:51:22.344437][info][25264][DeviceManager.cpp:15] Current found device(s): (0)
+[03/02 15:51:22.344446][debug][25264][DeviceManager.cpp:52] DeviceManager construct done!
+[03/02 15:51:22.346589][info][25264][DeviceManager.cpp:304] Enable net device enumeration: false
+[03/02 15:55:19.098510][debug][25281][LinuxPal.cpp:270] Device removed event occurred
+[03/02 15:55:19.098627][debug][25281][UsbDeviceEnumerator.cpp:137] usb device removed: 1-2.3-6
+[03/02 15:55:19.098638][debug][25281][UsbDeviceEnumerator.cpp:137] usb device removed: 1-2.3-6
+[03/02 15:55:19.098643][debug][25281][UsbDeviceEnumerator.cpp:142] Current usb device port list:
+[03/02 15:55:24.029493][debug][25281][LinuxPal.cpp:263] Device arrival event occurred
+[03/02 15:55:25.034150][debug][25282][EnumeratorLibusb.cpp:324] queryDevicesInfo done!
+[03/02 15:55:25.034240][debug][25282][UsbDeviceEnumerator.cpp:163] Current usb device port list:
+[03/02 15:55:25.034251][debug][25282][UsbDeviceEnumerator.cpp:166]  - 1-2.3-7.0 | Orbbec(R) Astra(TM) 3D Camera(F) Depth
+[03/02 15:55:25.034255][debug][25282][UsbDeviceEnumerator.cpp:166]  - 1-2.3-7.1 | Orbbec(R) Astra(TM) Audio Devive
+[03/02 15:55:30.773953][debug][25264][Context.cpp:81] Context destroying ...
+[03/02 15:55:30.774046][debug][25264][DeviceManager.cpp:56] DeviceManager destroy ...
+[03/02 15:55:30.774059][debug][25264][DeviceManager.cpp:64] DeviceManager Destructors done
+[03/02 15:55:30.774649][info][25264][Context.cpp:84] Context destroyed
+[03/02 15:55:34.172164][debug][25674][Context.cpp:30] Context creating, work_dir=/home/caps/fifo_ws
+[03/02 15:55:34.172273][debug][25674][Context.cpp:49] Config file version=1.1
+[03/02 15:55:34.172317][debug][25674][FrameBufferManager.cpp:23] Max global frame buffer size updated! size=2048.000MB
+[03/02 15:55:34.172330][info][25674][Context.cpp:68] Context created with config: /home/caps/fifo_ws/install/orbbec_camera/share/orbbec_camera/config/OrbbecSDKConfig_v1.0.xml
+[03/02 15:55:34.173551][info][25674][Context.cpp:73] Work directory=/home/caps/fifo_ws, SDK version=v1.10.35-20260128-fa838f5
+[03/02 15:55:34.174084][debug][25674][DeviceManager.cpp:30] DeviceManager init ...
+[03/02 15:55:34.174097][info][25674][LinuxPal.cpp:32] createObPal: create LinuxPal!
+[03/02 15:55:34.176080][debug][25674][DeviceManager.cpp:34] Enable USB Device Enumerator ...
+[03/02 15:55:34.180251][debug][25674][EnumeratorLibusb.cpp:324] queryDevicesInfo done!
+[03/02 15:55:34.180275][debug][25674][UsbDeviceEnumerator.cpp:163] Current usb device port list:
+[03/02 15:55:34.180289][debug][25674][UsbDeviceEnumerator.cpp:166]  - 1-2.3-7.0 | Orbbec(R) Astra(TM) 3D Camera(F) Depth
+[03/02 15:55:34.180330][debug][25674][UsbDeviceEnumerator.cpp:166]  - 1-2.3-7.1 | Orbbec(R) Astra(TM) Audio Devive
+[03/02 15:55:34.180508][info][25674][LinuxPal.cpp:166] Create PollingDeviceWatcher!
+[03/02 15:55:34.180553][debug][25674][UsbDeviceEnumerator.cpp:78] No matched usb device found!
+[03/02 15:55:34.180567][info][25674][DeviceManager.cpp:15] Current found device(s): (0)
+[03/02 15:55:34.180576][debug][25674][DeviceManager.cpp:52] DeviceManager construct done!
+[03/02 15:55:34.182573][info][25674][DeviceManager.cpp:304] Enable net device enumeration: false
+[03/02 15:55:58.049257][debug][25674][Context.cpp:81] Context destroying ...
+[03/02 15:55:58.049355][debug][25674][DeviceManager.cpp:56] DeviceManager destroy ...
+[03/02 15:55:58.049375][debug][25674][DeviceManager.cpp:64] DeviceManager Destructors done
+[03/02 15:55:58.049895][info][25674][Context.cpp:84] Context destroyed

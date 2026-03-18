@@ -14,7 +14,7 @@ class PPEDetectorNode(Node):
         super().__init__('ppe_detector_node')
         
         # 파라미터 선언
-        self.declare_parameter('model_path', '/home/ym/fifo_ws/src/ppe_detector/models/yolo26n_model/origin3/weights/best.pt')
+        self.declare_parameter('model_path', '/home/caps/fifo_ws/src/ppe_detector/models/yolo26n_model/origin3_addhand4/weights/best.pt')
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('iou_threshold', 0.5)
         self.declare_parameter('max_det', 10)
