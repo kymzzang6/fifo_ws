@@ -1,6 +1,9 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/float32.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
+#include "sensor_msgs/msg/image.hpp"
+#include "cv_bridge/cv_bridge.h"
+#include <opencv2/opencv.hpp>
 
 #include "TmLocalCamera.hxx"
 #include "TmFrame.hxx"
@@ -21,6 +24,8 @@ public:
   {
     // Publishers (파이썬에게 계산된 온도 Float32 값만 반환)
     face_temp_pub_ = create_publisher<std_msgs::msg::Float32>("/thermal/face_temp", 10);
+    // ✅ 추가: 열화상 비디오 퍼블리셔
+    video_pub_ = create_publisher<sensor_msgs::msg::Image>("/thermal/video", 10);
 
     // Subscribers (파이썬에서 BBox 수신)
     face_sub_ = create_subscription<std_msgs::msg::Float32MultiArray>(
@@ -118,9 +123,44 @@ private:
       face_temp_pub_->publish(msg);
     }
     // 손 온도 계산 로직 삭제됨
+
+    // ✅ 추가: /thermal/video 퍼블리시
+    {
+      cv::Mat temp_mat(height_, width_, CV_32FC1);
+      double min_temp = 1000.0, max_temp = -1000.0;
+
+      for (int y = 0; y < height_; ++y) {
+        for (int x = 0; x < width_; ++x) {
+          double raw = frame.GetPixel(x, y);
+          double temp = cam_->GetTemperature(raw);
+
+          temp_mat.at<float>(y, x) = static_cast<float>(temp);
+
+          if (temp < min_temp) min_temp = temp;
+          if (temp > max_temp) max_temp = temp;
+        }
+      }
+
+      cv::Mat draw_mat;
+      if (max_temp > min_temp) {
+        temp_mat.convertTo(draw_mat, CV_8UC1, 255.0 / (max_temp - min_temp), -min_temp * 255.0 / (max_temp - min_temp));
+      } else {
+        draw_mat = cv::Mat::zeros(height_, width_, CV_8UC1);
+      }
+
+      cv::Mat color_mat;
+      cv::applyColorMap(draw_mat, color_mat, cv::COLORMAP_INFERNO);
+
+      auto video_msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", color_mat).toImageMsg();
+      video_msg->header.stamp = this->now();
+      video_msg->header.frame_id = "thermal_camera_link";
+      video_pub_->publish(*video_msg);
+    }
   }
 
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr face_temp_pub_;
+  // ✅ 추가: 열화상 비디오 퍼블리셔 멤버 변수
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr video_pub_;
   rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr face_sub_;
 
   rclcpp::TimerBase::SharedPtr timer_;

@@ -1,15 +1,19 @@
-import type { ReactNode } from "react";
+import type { ReactNode, ButtonHTMLAttributes } from "react";
 
-interface ButtonProps {
+interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   children: ReactNode;
   className?: string;
   onClick?: () => void;
 }
 
-export function Button({ children, className = "", onClick }: ButtonProps) {
+export function Button({ 
+  children, 
+  className = "",
+  ...props
+ }: ButtonProps) {
   return (
     <button
-      onClick={onClick}
+      {...props}
       className={`px-4 py-2 rounded-lg font-semibold bg-yellow-400 text-black hover:bg-yellow-300 transition ${className}`}
     >
       {children}

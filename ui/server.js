@@ -1,213 +1,291 @@
 import { SerialPort } from "serialport";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 
 /* ===== 카드 UID 등록 ===== */
 const ADMIN_CARDS = {
-  "45 45 07 AD": { id: "A-001", name: "관리자", role: "관리자" },
+  "01D05005": { id: "A-001", name: "관리자", role: "관리자" },
 };
 
 const WORKER_CARDS = {
-  "C7 90 F6 65": { id: "W-001", name: "작업자1", role: "작업자" },
-  "0B 1A C2 01": { id: "W-002", name: "작업자2", role: "작업자" },
+  "C790F665": { id: "W-001", name: "작업자1", role: "작업자" },
+  "0B1AC201": { id: "W-002", name: "작업자2", role: "작업자" },
 };
 
 /* ===== 설정 ===== */
-const SERIAL_PATH = process.env.RFID_PORT || "COM9";
+const SERIAL_PATH = process.env.RFID_PORT || "COM13";
 const BAUD_RATE = Number(process.env.RFID_BAUD || 9600);
-
-// ✅ 같은 UID가 너무 짧은 시간에 여러 번 들어오는 걸 막는 쿨다운(밀리초)
-// 200~700ms 사이로 보통 맞춤
 const COOLDOWN_MS = Number(process.env.RFID_COOLDOWN || 400);
+
+const ENABLE_DTR_RESET =
+  String(process.env.RFID_DTR_RESET || "false").toLowerCase() === "true";
+
+const DEBUG =
+  String(process.env.RFID_DEBUG || "true").toLowerCase() === "true";
+
+/* ===== ROS2 rosbridge 설정 ===== */
+const ROS_BRIDGE_URL = process.env.ROS_BRIDGE_URL || "ws://localhost:9090";
+const ROS_TOPIC_ALL_DETECTED = "/all_detected";
+const ROS_TOPIC_MODE = "/mode_command";
+const ROS_TOPIC_TELEOP = "/teleop_cmd";
+const ROS_TOPIC_TOWER = "/tower_command";
 
 /* ===== WebSocket 서버 ===== */
 const wss = new WebSocketServer({ port: 8765 });
 const clients = new Set();
 
-wss.on("connection", (ws) => {
-  clients.add(ws);
-  console.log("🟢 UI 연결됨 (clients:", clients.size, ")");
+/* ===== rosbridge client ===== */
+let rosWs = null;
+let rosConnected = false;
+let rosMsgId = 1;
+const advertisedTopics = new Set();
 
-  ws.on("close", () => {
-    clients.delete(ws);
-    console.log("⚪ UI 연결 해제 (clients:", clients.size, ")");
-  });
-
-  ws.on("error", () => {
-    clients.delete(ws);
-  });
-});
+function safeSend(ws, data) {
+  try {
+    if (ws.readyState === 1) {
+      ws.send(JSON.stringify(data));
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.log("❌ WS send error:", err?.message || err);
+    return false;
+  }
+}
 
 function broadcast(data) {
   const msg = JSON.stringify(data);
+
+  if (DEBUG) {
+    console.log("📡 broadcast:", msg);
+    console.log("📡 broadcast 대상 clients:", clients.size);
+  }
+
   for (const c of clients) {
     try {
-      c.send(msg);
-    } catch {}
+      if (c.readyState === 1) c.send(msg);
+    } catch (err) {
+      console.log("❌ broadcast error:", err?.message || err);
+    }
   }
 }
 
-/* ===== (중요) 사용 가능한 포트 출력 ===== */
-async function showPorts() {
-  const ports = await SerialPort.list();
-  console.log("\n📌 Available serial ports:");
-  if (!ports.length) {
-    console.log("  (none)");
+function rosSend(obj) {
+  if (!rosWs || rosWs.readyState !== WebSocket.OPEN) {
+    console.log("❌ rosbridge 미연결");
+    return false;
+  }
+  rosWs.send(JSON.stringify(obj));
+  return true;
+}
+
+function advertiseTopic(topic, type) {
+  if (advertisedTopics.has(topic)) return true;
+
+  const ok = rosSend({
+    op: "advertise",
+    topic,
+    type,
+  });
+
+  if (ok) {
+    advertisedTopics.add(topic);
+    console.log(`📢 advertise: ${topic} (${type})`);
+  }
+  return ok;
+}
+
+function publishRos(topic, type, msg) {
+  if (!rosConnected) {
+    console.log(`❌ publish 실패 - rosbridge 미연결: ${topic}`);
+    return false;
+  }
+
+  advertiseTopic(topic, type);
+
+  const ok = rosSend({
+    op: "publish",
+    topic,
+    msg,
+  });
+
+  if (ok && DEBUG) {
+    console.log(`🚀 ROS publish -> ${topic}`, msg);
+  }
+  return ok;
+}
+
+function connectRosbridge() {
+  if (rosWs && (rosWs.readyState === WebSocket.OPEN || rosWs.readyState === WebSocket.CONNECTING)) {
     return;
   }
-  for (const p of ports) {
-    console.log(`- ${p.path} ${p.manufacturer ?? ""}`.trim());
-  }
-  console.log("");
-}
 
-/* ===== Arduino Serial 연결 + 수신 파싱 ===== */
-let port = null;
-let buffer = "";
+  console.log(`🔌 rosbridge 연결 시도: ${ROS_BRIDGE_URL}`);
+  rosWs = new WebSocket(ROS_BRIDGE_URL);
 
-// ✅ UID별 마지막 처리 시각 기록(중복 폭주 방지)
-const lastSeenAt = new Map();
+  rosWs.on("open", () => {
+    rosConnected = true;
+    advertisedTopics.clear();
+    console.log("✅ rosbridge 연결됨");
 
-function normalizeUidLine(line) {
-  const cleaned = line.replace(/\r/g, "").trim();
-  if (/^[0-9A-Fa-f]{8}$/.test(cleaned)) {
-    return cleaned.match(/.{1,2}/g).join(" ").toUpperCase();
-  }
-  return cleaned.toUpperCase();
-}
-
-// ✅ 이 이벤트는 고유하다는 것을 보장해주는 nonce (UI에서 sessionKey로 쓰기 좋음)
-function makeNonce() {
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function handleUid(uid) {
-  const now = Date.now();
-
-  //  1) 너무 짧은 시간 중복은 서버에서 컷 (리더기 노이즈/중복 출력 방지)
-  const last = lastSeenAt.get(uid) ?? 0;
-  if (now - last < COOLDOWN_MS) {
-    // 필요하면 디버깅용 로그
-    // console.log("↩︎ (cooldown skip)", uid);
-    return;
-  }
-  lastSeenAt.set(uid, now);
-
-  //  2) UI가 매번 새 이벤트로 인식하도록 nonce 포함해서 보냄
-  const nonce = makeNonce();
-  console.log("📟 UID 수신:", uid, "(nonce:", nonce, ")");
-
-  // 3) 분기 + 보안 멘트/코드 포함
-  if (ADMIN_CARDS[uid]) {
     broadcast({
-      type: "admin",
-      uid,
-      nonce,
-      ...ADMIN_CARDS[uid],
-      code: "ADMIN_CARD",
-      severity: "info",
-      displayMessage: "관리자 카드 인식",
+      type: "rosbridge",
+      status: "open",
+      ts: new Date().toISOString(),
     });
-    return;
-  }
 
-  if (WORKER_CARDS[uid]) {
-    const w = WORKER_CARDS[uid];
-    broadcast({
-      type: "worker",
-      uid,
-      nonce,
-      ...w,
-      code: "WORKER_CARD",
-      severity: "info",
-      displayMessage: `${w.name} 카드 인식`,
+    // /all_detected 구독
+    rosSend({
+      op: "subscribe",
+      id: `sub-${rosMsgId++}`,
+      topic: ROS_TOPIC_ALL_DETECTED,
+      type: "std_msgs/msg/Bool",
     });
-    return;
-  }
-
-  // ✅ unknown: 강한 보안 로그 + UI에 문구 전달
-  console.warn("🚨 [SECURITY] 미등록 카드 감지:", {
-    uid,
-    at: new Date().toISOString(),
-    clients: clients.size,
   });
 
-  broadcast({
-    type: "unknown",
-    uid,
-    nonce,
-    code: "UNREGISTERED_CARD",
-    severity: "high",
-    displayMessage: "🚨 미등록 카드입니다. 접근이 차단되었습니다. 관리자에게 문의하세요.",
+  rosWs.on("message", (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+
+      if (msg.op === "publish" && msg.topic === ROS_TOPIC_ALL_DETECTED) {
+        broadcast({
+          type: "ppe_all_detected",
+          value: Boolean(msg?.msg?.data),
+          ts: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      console.log("❌ rosbridge message parse error:", err?.message || err);
+    }
+  });
+
+  rosWs.on("close", () => {
+    rosConnected = false;
+    advertisedTopics.clear();
+    console.log("❌ rosbridge 연결 종료");
+
+    broadcast({
+      type: "rosbridge",
+      status: "closed",
+      ts: new Date().toISOString(),
+    });
+
+    setTimeout(connectRosbridge, 1000);
+  });
+
+  rosWs.on("error", (err) => {
+    rosConnected = false;
+    console.log("❌ rosbridge error:", err?.message || err);
   });
 }
 
-function connectSerial() {
-  console.log(`🔌 Serial 연결 시도: ${SERIAL_PATH} @ ${BAUD_RATE}`);
+/* ===== UI WebSocket ===== */
+wss.on("connection", (ws, req) => {
+  clients.add(ws);
 
-  port = new SerialPort({
-    path: SERIAL_PATH,
-    baudRate: BAUD_RATE,
-    autoOpen: true,
+  const ip =
+    req?.socket?.remoteAddress ||
+    req?.headers?.["x-forwarded-for"] ||
+    "unknown";
+
+  console.log(`🟢 UI 연결됨 (clients: ${clients.size}, ip: ${ip})`);
+
+  safeSend(ws, {
+    type: "server",
+    status: "connected",
+    ts: new Date().toISOString(),
+    message: "WebSocket 연결 성공",
   });
 
-port.on("open", () => {
-  console.log("✅ Serial OPEN:", SERIAL_PATH);
-
-  // 🔥 Arduino 강제 리셋 (IDE에서 업로드한 효과)
-  port?.set({ dtr: false }, () => {
-    setTimeout(() => {
-      port?.set({ dtr: true });
-    }, 120);
+  safeSend(ws, {
+    type: "rosbridge",
+    status: rosConnected ? "open" : "closed",
+    ts: new Date().toISOString(),
   });
 
-  broadcast({ type: "serial", status: "open", path: SERIAL_PATH });
+  ws.on("message", (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+
+      if (DEBUG) {
+        console.log("💬 WS <- UI:", msg);
+      }
+
+      // 1) 모드 전환
+      if (msg?.type === "set_mode" && typeof msg?.mode === "string") {
+        publishRos(
+          ROS_TOPIC_MODE,
+          "std_msgs/msg/String",
+          { data: msg.mode }
+        );
+
+        broadcast({
+          type: "robot_mode",
+          mode: msg.mode,
+          ts: new Date().toISOString(),
+        });
+        return;
+      }
+
+      // 2) 수동 주행
+      if (msg?.type === "cmd_vel") {
+        const linearX = Number(msg?.linear_x ?? 0);
+        const angularZ = Number(msg?.angular_z ?? 0);
+
+        publishRos(
+          ROS_TOPIC_TELEOP,
+          "geometry_msgs/msg/Twist",
+          {
+            linear: { x: linearX, y: 0.0, z: 0.0 },
+            angular: { x: 0.0, y: 0.0, z: angularZ },
+          }
+        );
+        return;
+      }
+
+      // 3) 타워램프
+      if (msg?.type === "tower_command") {
+        const payload = {
+          color: String(msg?.color ?? ""),
+          pattern: String(msg?.pattern ?? ""),
+          duration: Number(msg?.duration ?? 0),
+        };
+
+        publishRos(
+          ROS_TOPIC_TOWER,
+          "std_msgs/msg/String",
+          { data: JSON.stringify(payload) }
+        );
+        return;
+      }
+    } catch (err) {
+      console.log("❌ UI message parse error:", err?.message || err);
+    }
+  });
+
+  ws.on("close", (code, reason) => {
+    clients.delete(ws);
+    console.log(
+      `⚪ UI 연결 해제 (clients: ${clients.size}, code: ${code}, reason: ${reason?.toString?.() || ""})`
+    );
+  });
+
+  ws.on("error", (err) => {
+    clients.delete(ws);
+    console.log("❌ WS ERROR:", err?.message || err);
+  });
 });
 
+/* ===== 시작 ===== */
+connectRosbridge();
 
-  port.on("error", (err) => {
-    console.log("❌ Serial ERROR:", err?.message || err);
-    broadcast({ type: "serial", status: "error", message: String(err?.message || err) });
-  });
-
-  port.on("close", () => {
-    console.log("⚠️ Serial CLOSED. 1초 후 재연결 시도");
-    broadcast({ type: "serial", status: "closed" });
-    setTimeout(() => connectSerial(), 1000);
-  });
-
-  port.on("data", (data) => {
-  //  0) 들어온 원본 바이트/문자열을 무조건 찍기
-  const asUtf8 = data.toString("utf8");
-  const asHex = Buffer.from(data).toString("hex").match(/.{1,2}/g)?.join(" ") ?? "";
-
-  console.log("RAW(utf8):", JSON.stringify(asUtf8));
-  console.log("RAW(hex) :", asHex);
-
-  //  1) 버퍼에 누적
-  buffer += asUtf8;
-
-  //  2) 줄바꿈 기준 분리(Arduino가 \r\n 이면 \n으로 split 가능)
-  const lines = buffer.split(/\n/);
-  buffer = lines.pop() ?? "";
-
-  //  3) 줄 단위로 찍고 normalize 후 handleUid
-  for (const rawLine of lines) {
-    const trimmed = rawLine.replace(/\r/g, "").trim();
-    console.log("LINE:", JSON.stringify(trimmed));
-
-    const uid = normalizeUidLine(trimmed);
-    console.log("UID(normalized):", uid);
-
-    if (!uid) continue;
-    handleUid(uid);
-  }
-});
-
-}
-
-/* ===== 실행 (Top-level await 안전 버전) ===== */
-(async () => {
-  console.log("✅ RFID 서버 실행됨 (ws://localhost:8765)");
-  await showPorts();
-  connectSerial();
-})();
+console.log(`✅ RFID 서버 실행됨 (ws://localhost:8765)`);
+console.log(`🧪 DEBUG = ${DEBUG}`);
+console.log(`🧪 SERIAL_PATH = ${SERIAL_PATH}`);
+console.log(`🧪 BAUD_RATE = ${BAUD_RATE}`);
+console.log(`🧪 COOLDOWN_MS = ${COOLDOWN_MS}`);
+console.log(`🧪 ENABLE_DTR_RESET = ${ENABLE_DTR_RESET}`);
+console.log(`🧪 ROS_BRIDGE_URL = ${ROS_BRIDGE_URL}`);
+console.log(`🧪 ROS_TOPIC_ALL_DETECTED = ${ROS_TOPIC_ALL_DETECTED}`);
+console.log(`🧪 ROS_TOPIC_MODE = ${ROS_TOPIC_MODE}`);
+console.log(`🧪 ROS_TOPIC_TELEOP = ${ROS_TOPIC_TELEOP}`);
+console.log(`🧪 ROS_TOPIC_TOWER = ${ROS_TOPIC_TOWER}`);

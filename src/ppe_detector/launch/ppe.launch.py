@@ -13,7 +13,7 @@ def generate_launch_description():
     # Launch Arguments
     model_name_arg = DeclareLaunchArgument(
         'model_name',
-        default_value='yolo26n_model/origin3_addhand3',
+        default_value='yolo26s_model/origin3_addhand5',
         description='Folder name of the custom YOLO model'
     )
     

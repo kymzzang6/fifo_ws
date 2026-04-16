@@ -4,3 +4,4 @@
 **/models/**
 !**/models/**/
 !**/models/**/*.pt
+ui/node_modules/

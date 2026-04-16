@@ -3,7 +3,7 @@ from ultralytics import YOLO
 from ultralytics import YOLO
 
 # 1. 모델 경로 설정 (본인의 .pt 파일 경로로 수정)
-model_path = '/home/caps/fifo_ws/src/ppe_detector/models/yolo26n_model/origin3_addhand4/weights/best.pt'
+model_path = '/home/caps/fifo_ws/src/ppe_detector/models/yolo26s_model/origin3_addhand5/weights/best.pt'
 
 # 2. 모델 로드
 model = YOLO(model_path)
