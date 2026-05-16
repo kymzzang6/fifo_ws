@@ -41,8 +41,23 @@ public:
     }
 
     cam_ = std::make_shared<TmLocalCamera>();
-    if (!cam_->Open(&cam_list[0])) {
-      RCLCPP_ERROR(get_logger(), "❌ 연결 실패");
+    bool is_connected = false;
+
+    // 🌟 핵심 변경 부분: 리스트를 돌면서 열화상 카메라 찾기
+    for (size_t i = 0; i < cam_list.size(); ++i) {
+      RCLCPP_INFO(get_logger(), "[%zu]번 카메라 Open 시도 중...", i);
+      
+      if (cam_->Open(&cam_list[i])) {
+        RCLCPP_INFO(get_logger(), "👉 [%zu]번 인덱스에서 열화상 카메라 연결 성공!", i);
+        is_connected = true;
+        break; // 성공했으니 반복문 탈출
+      } else {
+        RCLCPP_WARN(get_logger(), "[%zu]번은 열화상 카메라가 아니거나 실패함.", i);
+      }
+    }
+
+    if (!is_connected) {
+      RCLCPP_ERROR(get_logger(), "❌ 열화상 카메라 연결을 최종 실패했습니다.");
       return;
     }
 

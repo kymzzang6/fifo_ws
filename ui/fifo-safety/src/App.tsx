@@ -16,9 +16,9 @@ import { handleRFID } from "./rfid/rfidHandler";
 /* ───────────────────────── URL 설정 ───────────────────────── */
 
 const YOLO_STREAM_URL =
-  "http://localhost:8080/stream?topic=/debug/visualization&type=mjpeg";
+  "http://localhost:8080/stream?topic=/ppe_debug&type=mjpeg";
 
-const THERMO_STREAM_URL = "http://localhost:8090/thermo?type=mjpeg";
+const THERMO_STREAM_URL = "http://localhost:8080/stream?topic=/thermal/video&type=mjpeg";
 
 const SLAM_STREAM_URL =
   (import.meta as any).env?.VITE_SLAM_STREAM_URL ??
@@ -26,7 +26,7 @@ const SLAM_STREAM_URL =
 
 const WS_URL =
   (import.meta as any).env?.VITE_HA_WS_URL ??
-  "ws://homeassistant.local:8123/api/websocket";
+  "http://localhost:8123/api/websocket";
 const HA_TOKEN = (import.meta as any).env?.VITE_HA_TOKEN ?? "";
 
 const RFID_WS_URL =
@@ -290,74 +290,66 @@ export default function App() {
   );
 
   const sendSirenPreset = useCallback(
-    (
-      preset:
-        | "danger"
-        | "warning"
-        | "unregistered"
-        | "registered"
-        | "admin"
-        | "moving"
-        | "off"
-    ) => {
-      if (preset === "danger") {
-        sendTowerCommand("red", "steady", 0);
-        showToast("위험 상태 램프/사이렌 실행", {
-          title: "타워 제어",
-          level: "danger",
-        });
-        return;
-      }
+  (
+    preset:
+      | "danger"
+      | "warning"
+      | "unregistered"
+      | "registered"
+      | "admin"
+      | "moving"
+      | "sound"
+      | "off"
+  ) => {
 
-      if (preset === "warning") {
-        sendTowerCommand("yellow", "blink", 0);
-        showToast("작업자 컨디션 저조 경고 실행", {
-          title: "타워 제어",
-          level: "warning",
-        });
-        return;
-      }
+    // 🔴 위험
+    if (preset === "danger") {
+      sendTowerCommand("red", "steady", 5);
+      return;
+    }
 
-      if (preset === "unregistered") {
-        sendTowerCommand("yellow", "alert", 3);
-        showToast("미등록 카드 경고 3초 실행", {
-          title: "타워 제어",
-          level: "warning",
-        });
-        return;
-      }
+    // 🟡 컨디션 저조
+    if (preset === "warning") {
+      sendTowerCommand("yellow", "steady", 5);
+      return;
+    }
 
-      if (preset === "registered") {
-        sendTowerCommand("green", "steady", 2);
-        showToast("작업자 등록 완료 표시", {
-          title: "타워 제어",
-          level: "success",
-        });
-        return;
-      }
+    // 🔴 미등록 카드
+    if (preset === "unregistered") {
+      sendTowerCommand("red", "blink", 5);
+      return;
+    }
 
-      if (preset === "admin") {
-        sendTowerCommand("yellow", "blink", 10);
-        showToast("관리자 권한 10초 표시", {
-          title: "타워 제어",
-          level: "info",
-        });
-        return;
-      }
+    // 🟢 등록 완료
+    if (preset === "registered") {
+      sendTowerCommand("green", "steady", 5);
+      return;
+    }
 
-      if (preset === "moving") {
-        sendTowerCommand("blue", "steady", 0);
-        return;
-      }
+    // 🔵 관리자
+    if (preset === "admin") {
+      sendTowerCommand("blue", "steady", 10);
+      return;
+    }
 
-      sendTowerCommand("off", "off", 0);
-      showToast("타워/사이렌 정지", {
-        title: "타워 제어",
-        level: "info",
-      });
-    },
-    [sendTowerCommand, showToast]
-  );
+    // 🔵 이동 표시
+    if (preset === "moving") {
+      sendTowerCommand("blue", "steady", 0);
+      return;
+    }
+
+    // 🔊🔴 소음 위험
+    if (preset === "sound") {
+      sendTowerCommand("red", "steady", 5);
+      return;
+    }
+
+    // OFF
+    sendTowerCommand("off", "off", 0);
+
+  },
+  [sendTowerCommand]
+);
 
   const triggerConditionAlert = useCallback(() => {
     setConditionAlertOpen(true);
@@ -430,7 +422,7 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [keepGoingDirection, publishCmdVel, robotMode, sendSirenPreset]);
 
-  /* ─── mmWave / 생체값 ───────────────────────────────── */
+  /* ─── mmWave / 생체값 / 그리고 소리.. ───────────────────────────────── */
   const [resp, setResp] = useState<number | null>(null);
   const [hr, setHr] = useState<number | null>(null);
   const [conf, setConf] = useState<number | null>(null);
@@ -441,6 +433,34 @@ export default function App() {
 
   const [mmwaveEnabled, setMmwaveEnabled] = useState<boolean | null>(null);
   const [hasTarget, setHasTarget] = useState<boolean | null>(null);
+
+  const [soundValue, setSoundValue] = useState<number | null>(null);
+  const [soundUpdatedAt, setSoundUpdatedAt] = useState<number | null>(null);
+  const soundDangerTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+  if (soundValue == null) return;
+
+  if (soundValue >= 100) {
+    if (soundDangerTimer.current) return;
+
+    soundDangerTimer.current = window.setTimeout(() => {
+      sendSirenPreset("sound");
+
+      showToast("소음 위험 감지", {
+        title: "소음 경고",
+        level: "warning",
+      });
+
+      soundDangerTimer.current = null;
+    }, 2000);
+  } else {
+    if (soundDangerTimer.current) {
+      clearTimeout(soundDangerTimer.current);
+      soundDangerTimer.current = null;
+    }
+  }
+}, [soundValue, sendSirenPreset, showToast]);
 
   /* ─── Thermoeye ─────────────────────────────────────── */
   const [bodyTemp, setBodyTemp] = useState<number | null>(null);
@@ -483,19 +503,77 @@ export default function App() {
   useEffect(() => setTempWarnStr(String(tempWarn)), [tempWarn]);
   useEffect(() => setTempDangerStr(String(tempDanger)), [tempDanger]);
 
+  useEffect(() => {
+  console.log("🔥 thermal/PPE useEffect start");
+
+  const ros = new WebSocket("ws://localhost:9090");
+
+  ros.onopen = () => {
+    console.log("✅ ROS bridge connected for thermal + PPE");
+
+    ros.send(
+      JSON.stringify({
+        op: "subscribe",
+        topic: "/thermal/face_temp",
+      })
+    );
+
+    ros.send(
+      JSON.stringify({
+        op: "subscribe",
+        topic: "/all_detected",
+      })
+    );
+  };
+
+  ros.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+
+      if (msg.op === "publish" && msg.topic === "/thermal/face_temp") {
+        const value = Number(msg.msg?.data);
+
+        console.log("🌡️ BODY TEMP:", value);
+
+        if (!Number.isNaN(value)) {
+          setBodyTemp(value);
+          setThermoDeviceConnected(true);
+        }
+
+        return;
+      }
+
+      if (msg.op === "publish" && msg.topic === "/all_detected") {
+        const detected = Boolean(msg.msg?.data);
+
+        console.log("🦺 PPE ALL DETECTED:", detected);
+
+        setPpeAllDetected(detected);
+
+        return;
+      }
+    } catch (err) {
+      console.warn("thermal/PPE ros parse error:", err);
+    }
+  };
+
+  ros.onerror = () => {
+    console.log("❌ ROS bridge thermal/PPE connection error");
+    setThermoDeviceConnected(false);
+  };
+
+  ros.onclose = () => {
+    console.log("❌ ROS bridge thermal/PPE connection closed");
+    setThermoDeviceConnected(false);
+  };
+
+  return () => {
+    ros.close();
+  };
+}, []);
+
   /* ─── 데이터 ─────────────────────────────────────────── */
-  const [workers, setWorkers] = useState<Worker[]>([
-    {
-      id: "W-001",
-      name: "홍길동",
-      role: "전기",
-      status: "active",
-      checkinStartedAt: Date.now(),
-      sessionKey: makeWorkerKey(undefined, "W-001") || "W-001",
-      failReasons: [],
-      warnings: [],
-    },
-  ]);
+  const [workers, setWorkers] = useState<Worker[]>([]);
 
   const [hazards, setHazards] = useState<Hazard[]>([
     { id: "H-1", x: 24, y: 50, status: "open" },
@@ -564,62 +642,79 @@ export default function App() {
     let msgId = 1;
 
     const processState = (entity: any) => {
-      if (!entity) return;
-      const entityId: string = entity.entity_id;
-      const stateStr: string = entity.state;
+  if (!entity) return;
 
-      if (
-        entityId ===
-        "sensor.seeedstudio_mr60bha2_kit_613f70_real_time_respiratory_rate"
-      ) {
-        const v = parseFloat(stateStr);
-        if (!Number.isNaN(v)) {
-          setResp(v);
-          setRespHistory((p) => [...p.slice(-99), v]);
-        }
-      }
+  const entityId: string = entity.entity_id;
+  const stateStr: string = entity.state;
 
-      if (
-        entityId ===
-        "sensor.seeedstudio_mr60bha2_kit_613f70_real_time_heart_rate"
-      ) {
-        const v = parseFloat(stateStr);
-        if (!Number.isNaN(v)) {
-          setHr(v);
-          setHrHistory((p) => [...p.slice(-99), v]);
-        }
-      }
+  // 🫁 호흡
+  if (entityId === "sensor.mr60bha2_breath_rate") {
+    const v = parseFloat(stateStr);
+    if (!Number.isNaN(v)) {
+      setResp(v);
+      setRespHistory((p) => [...p.slice(-99), v]);
 
-      if (entityId === "input_boolean.mmwave_enabled") {
-        setMmwaveEnabled(stateStr === "on");
-      }
+      if (v > 0) setHasTarget(true);
+    }
+  }
 
-      if (
-        entityId ===
-        "binary_sensor.seeedstudio_mr60bha2_kit_613f70_mr60bha2_has_target"
-      ) {
-        setHasTarget(stateStr === "on");
-      }
+  // ❤️ 심박
+  if (entityId === "sensor.mr60bha2_heart_rate") {
+    const v = parseFloat(stateStr);
+    if (!Number.isNaN(v)) {
+      setHr(v);
+      setHrHistory((p) => [...p.slice(-99), v]);
 
-      if (entityId === "sensor.mmwave_confidence") {
-        const v = parseFloat(stateStr);
-        if (!Number.isNaN(v)) setConf(v);
-      }
+      if (v > 0) setHasTarget(true);
+    }
+  }
 
-      if (entityId === "sensor.thermoeye_body_temperature") {
-        const v = parseFloat(stateStr);
-        if (!Number.isNaN(v)) setBodyTemp(v);
-      }
+  // 📏 거리값
+if (entityId === "sensor.mr60bha2_distance") {
+  const v = parseFloat(stateStr);
 
-      if (entityId === "binary_sensor.thermoeye_connected") {
-        setThermoDeviceConnected(stateStr === "on");
-      }
+  if (!Number.isNaN(v) && v > 0 && v < 300) {
+    setHasTarget(true);
+  }
+}
 
-      if (entityId === "binary_sensor.ppe_helmet") setPpeHelmet(stateStr === "on");
-      if (entityId === "binary_sensor.ppe_vest") setPpeVest(stateStr === "on");
-      if (entityId === "binary_sensor.ppe_gloves") setPpeGloves(stateStr === "on");
-    };
+// 👤 사람 감지 센서
+if (entityId === "binary_sensor.mr60bha2_person_detected") {
+  setHasTarget(stateStr === "on");
+}
 
+// 🎯 타겟 수
+if (entityId === "sensor.mr60bha2_target_count") {
+  const v = parseFloat(stateStr);
+
+  if (!Number.isNaN(v)) {
+    setHasTarget(v > 0);
+  }
+}
+
+  // 기존 로직 유지
+  if (entityId === "input_boolean.mmwave_enabled") {
+    setMmwaveEnabled(stateStr === "on");
+  }
+
+  if (entityId === "sensor.mmwave_confidence") {
+    const v = parseFloat(stateStr);
+    if (!Number.isNaN(v)) setConf(v);
+  }
+
+  if (entityId === "sensor.thermoeye_body_temperature") {
+    const v = parseFloat(stateStr);
+    if (!Number.isNaN(v)) setBodyTemp(v);
+  }
+
+  if (entityId === "binary_sensor.thermoeye_connected") {
+    setThermoDeviceConnected(stateStr === "on");
+  }
+
+  if (entityId === "binary_sensor.ppe_helmet") setPpeHelmet(stateStr === "on");
+  if (entityId === "binary_sensor.ppe_vest") setPpeVest(stateStr === "on");
+  if (entityId === "binary_sensor.ppe_gloves") setPpeGloves(stateStr === "on");
+};
     try {
       ws = new WebSocket(WS_URL);
 
@@ -629,6 +724,7 @@ export default function App() {
       ws.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data);
+          console.log("HA WS MSG:", msg.event?.data?.new_state); 
 
           if (msg.type === "auth_required") {
             ws?.send(JSON.stringify({ type: "auth", access_token: HA_TOKEN }));
@@ -699,6 +795,20 @@ export default function App() {
       rws.onmessage = (ev) => {
         try {
           const raw = JSON.parse(ev.data);
+           if (raw?.type === "sound") {
+            const value = Number(raw?.value);
+
+              if (!Number.isNaN(value)) {
+                 setSoundValue(value);
+                setSoundUpdatedAt(Date.now());
+            }
+
+            return;
+          }
+
+           if (raw?.type === "server") {
+  return;
+           }
 
           if (raw?.type === "rosbridge") {
             setBackendRosConnected(raw?.status === "open");
@@ -845,8 +955,8 @@ export default function App() {
   /* ───────────────────────── 자동 점검 ───────────────────────── */
 
   const CHECK_INTERVAL_MS = 1000;
-  const CHECK_TIMEOUT_MS = 20000;
-  const PASS_STREAK_REQUIRED = 3;
+  const CHECK_TIMEOUT_MS = 15000;
+  const PASS_STREAK_REQUIRED = 2;
   const FAIL_IMMEDIATE_BLOCK = false;
 
   const [passStreak, setPassStreak] = useState<Record<string, number>>({});
@@ -858,6 +968,19 @@ export default function App() {
   const evaluateGate = useCallback(() => {
     const fails: string[] = [];
     const warns: string[] = [];
+
+console.log("🧪 GATE DEBUG", {
+  ppeAllDetected,
+  ppeHelmet,
+  ppeVest,
+  ppeGloves,
+  hasTarget,
+  resp,
+  hr,
+  bodyTemp,
+  thermoConnected:
+    thermoDeviceConnected || thermoStreamConnected,
+});
 
     if (ppeAllDetected === null) {
       if (!ppeHelmet) fails.push("Helmet 미착용");
@@ -878,7 +1001,6 @@ export default function App() {
         warns.push(`체온 경고(${bodyTemp.toFixed(1)}°C)`);
     }
 
-    if (mmwaveEnabled !== true) fails.push("mmWave OFF/미확인");
     if (hasTarget !== true) fails.push("mmWave 타겟 미감지/미확인");
 
     if (resp == null) fails.push("호흡 데이터 없음");
@@ -889,6 +1011,10 @@ export default function App() {
     else if (hr < hrMin || hr > hrMax)
       fails.push(`심박 비정상(${hr.toFixed(0)})`);
 
+console.log("🚨 FAIL REASONS", fails);
+console.log("⚠️ WARNINGS", warns);
+console.log("✅ FINAL PASS", fails.length === 0);
+
     return { pass: fails.length === 0, fails, warns };
   }, [
     ppeAllDetected,
@@ -898,7 +1024,6 @@ export default function App() {
     thermoDeviceConnected,
     thermoStreamConnected,
     bodyTemp,
-    mmwaveEnabled,
     hasTarget,
     resp,
     hr,
@@ -910,65 +1035,106 @@ export default function App() {
     tempDanger,
   ]);
 
+  // 💡 추가된 부분: evaluateGate 함수의 최신 상태를 담아둘 ref 선언
+  const evaluateGateRef = useRef(evaluateGate);
+
+  // 💡 추가된 부분: evaluateGate가 갱신될 때마다 ref 값을 업데이트
   useEffect(() => {
-    const t = window.setInterval(() => {
-      const { pass: gatePass, fails, warns } = evaluateGate();
-      const nowTs = Date.now();
+    evaluateGateRef.current = evaluateGate;
+  }, [evaluateGate]);
 
-      const nextStreak: Record<string, number> = { ...passStreakRef.current };
-      let toastMsg: string | null = null;
+  useEffect(() => {
+  const t = window.setInterval(() => {
+    console.log("🔄 AUTO CHECK RUNNING");
+    
+    // 💡 수정된 부분: evaluateGate() 대신 evaluateGateRef.current() 사용
+    const { pass: gatePass, fails, warns } = evaluateGateRef.current();
+    const nowTs = Date.now();
 
-      setWorkers((prev) =>
-        prev.map((w) => {
-          if (w.status !== "pending") return w;
+    const nextStreak: Record<string, number> = {
+      ...passStreakRef.current,
+    };
 
-          const elapsed = nowTs - w.checkinStartedAt;
+    let toastMsg: string | null = null;
 
-          if (elapsed > CHECK_TIMEOUT_MS) {
-            nextStreak[w.sessionKey] = 0;
-            return {
-              ...w,
-              status: "blocked",
-              failReasons: fails.length ? fails : ["시간 초과"],
-              warnings: warns,
-            };
-          }
+    setWorkers((prev) =>
+      prev.map((w) => {
+        if (w.status !== "pending") return w;
 
-          if (!gatePass) {
-            nextStreak[w.sessionKey] = 0;
-            return {
-              ...w,
-              status: "pending",
-              failReasons: fails,
-              warnings: warns,
-            };
-          }
+        const elapsed = nowTs - w.checkinStartedAt;
 
-          const cur = nextStreak[w.sessionKey] ?? 0;
-          const updated = cur + 1;
-          nextStreak[w.sessionKey] = updated;
+        if (elapsed > CHECK_TIMEOUT_MS) {
+          delete nextStreak[w.sessionKey];
 
-          if (updated >= PASS_STREAK_REQUIRED) {
-            nextStreak[w.sessionKey] = 0;
-            if (!toastMsg) toastMsg = `${w.name} 체크인 완료`;
-            return { ...w, status: "active", failReasons: [], warnings: warns };
-          }
+          return {
+            ...w,
+            status: "blocked",
+            failReasons: fails.length ? fails : ["시간 초과"],
+            warnings: warns,
+          };
+        }
 
-          return { ...w, warnings: warns };
-        })
-      );
+        if (!gatePass) {
+  console.log("❌ GATE FAIL", fails);
 
-      setPassStreak(nextStreak);
-      if (toastMsg) {
-        showToast(toastMsg, {
-          title: "출입 체크인",
-          level: "success",
-        });
-      }
-    }, CHECK_INTERVAL_MS);
+  return {
+    ...w,
+    status: "pending",
+    failReasons: fails,
+    warnings: warns,
+  };
+}
 
-    return () => window.clearInterval(t);
-  }, [evaluateGate, showToast]);
+const cur = passStreakRef.current[w.sessionKey] ?? 0;
+const updated = cur + 1;
+
+nextStreak[w.sessionKey] = updated;
+
+console.log("✅ PASS COUNT", {
+  worker: w.name,
+  updated,
+  required: PASS_STREAK_REQUIRED,
+});
+
+        console.log("✅ PASS COUNT", {
+         worker: w.name,
+         updated,
+        required: PASS_STREAK_REQUIRED,
+      });
+
+        if (updated >= PASS_STREAK_REQUIRED) {
+          delete nextStreak[w.sessionKey];
+          toastMsg = `${w.name} 체크인 완료`;
+
+          return {
+            ...w,
+            status: "active",
+            failReasons: [],
+            warnings: warns,
+          };
+        }
+
+        return {
+          ...w,
+          status: "pending",
+          failReasons: [],
+          warnings: warns,
+        };
+      })
+    );
+
+    setPassStreak(nextStreak);
+
+    if (toastMsg) {
+      showToast(toastMsg, {
+        title: "출입 체크인",
+        level: "success",
+      });
+    }
+  }, CHECK_INTERVAL_MS);
+
+  return () => window.clearInterval(t);
+}, [showToast]); // 💡 수정된 부분: evaluateGate 의존성을 제거하여 무한 리셋 방지
 
   /* ───────────────────────── 작업자 등록/삭제/재검사 ───────────────────────── */
 
@@ -1147,28 +1313,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0E0E0E] text-white p-6 space-y-6 font-sans">
-      <div className="hidden">
-        <img
-          ref={(el) => {
-            yoloImgRef.current = el;
-          }}
-          src={YOLO_STREAM_URL}
-          alt="yolo-preload"
-          className="pointer-events-none"
-          onLoad={() => setYoloStreamConnected(true)}
-          onError={() => setYoloStreamConnected(false)}
-        />
-        <img
-          ref={(el) => {
-            thermoImgRef.current = el;
-          }}
-          src={THERMO_STREAM_URL}
-          alt="thermo-preload"
-          className="pointer-events-none"
-          onLoad={() => setThermoStreamConnected(true)}
-          onError={() => setThermoStreamConnected(false)}
-        />
-      </div>
 
       <header className="flex justify-between items-center border-b border-gray-700 pb-4">
         <h1 className="text-3xl font-bold text-[#FFD400]">FIFO Safety Hub</h1>
@@ -1264,6 +1408,22 @@ export default function App() {
                 로봇 모드:{" "}
                 <span className="text-[#FFD400] font-semibold">{robotMode}</span>
               </p>
+                <p>
+                 소음:{" "}
+                 <span
+                 className={
+                 soundValue == null
+                  ? "text-gray-400"
+                  : soundValue >= 85
+                  ? "text-red-400 font-semibold"
+                  : soundValue >= 70
+                 ? "text-yellow-400 font-semibold"
+                 : "text-green-400 font-semibold"
+                  }
+                 >
+                 {soundValue == null ? "--" : `${soundValue.toFixed(1)} dB`}
+                 </span>
+               </p>
             </div>
           </CardContent>
         </Card>
@@ -1302,44 +1462,52 @@ export default function App() {
               실시간 PPE 인식
             </h2>
 
-            <div className="relative h-56 bg-[#111] rounded-md flex flex-col items-center justify-center space-y-2">
-              <div
-                className={ppeHelmet ? "text-gray-300 text-sm" : "text-red-400 text-sm"}
-              >
-                Helmet {ppeHelmet ? "✅" : "❌"}
-              </div>
-              <div
-                className={ppeVest ? "text-gray-300 text-sm" : "text-red-400 text-sm"}
-              >
-                Vest {ppeVest ? "✅" : "❌"}
-              </div>
-              <div
-                className={ppeGloves ? "text-gray-300 text-sm" : "text-red-400 text-sm"}
-              >
-                Gloves {ppeGloves ? "✅" : "❌"}
-              </div>
+            <div className="relative h-56 bg-[#111] rounded-md overflow-hidden border border-[#2A2A2A]">
+  <img
+    src={YOLO_STREAM_URL}
+    alt="PPE YOLO stream"
+    className="absolute inset-0 w-full h-full object-contain bg-black"
+    onLoad={() => setYoloStreamConnected(true)}
+    onError={() => setYoloStreamConnected(false)}
+  />
 
-              <div className="absolute top-2 right-2 flex flex-col gap-2">
-                <SmallChip
-                  label="🫁 호흡"
-                  value={resp != null ? Number(resp.toFixed(1)) : null}
-                  unit="bpm"
-                  color={respColor}
-                />
-                <SmallChip
-                  label="🫀 심박"
-                  value={hr != null ? Number(hr.toFixed(0)) : null}
-                  unit="bpm"
-                  color={hrColor}
-                />
-                <SmallChip
-                  label="🌡️ 체온"
-                  value={bodyTemp != null ? Number(bodyTemp.toFixed(1)) : null}
-                  unit="°C"
-                  color={tempColor}
-                />
-              </div>
-            </div>
+  <div className="absolute top-2 left-2 text-xs text-gray-300 bg-black/50 px-2 py-1 rounded">
+    {yoloConnected ? "YOLO 연결됨" : "YOLO 연결 대기"}
+  </div>
+
+  <div className="absolute top-2 right-2 flex flex-col gap-2">
+    <SmallChip
+      label="🫁 호흡"
+      value={resp != null ? Number(resp.toFixed(1)) : null}
+      unit="bpm"
+      color={respColor}
+    />
+    <SmallChip
+      label="🫀 심박"
+      value={hr != null ? Number(hr.toFixed(0)) : null}
+      unit="bpm"
+      color={hrColor}
+    />
+    <SmallChip
+      label="🌡️ 체온"
+      value={bodyTemp != null ? Number(bodyTemp.toFixed(1)) : null}
+      unit="°C"
+      color={tempColor}
+    />
+  </div>
+
+  <div className="absolute left-2 bottom-2 text-xs bg-black/60 px-2 py-1 rounded flex flex-wrap gap-2">
+    <span className={ppeHelmet ? "text-emerald-300" : "text-red-300"}>
+      Helmet {ppeHelmet ? "✅" : "❌"}
+    </span>
+    <span className={ppeVest ? "text-emerald-300" : "text-red-300"}>
+      Vest {ppeVest ? "✅" : "❌"}
+    </span>
+    <span className={ppeGloves ? "text-emerald-300" : "text-red-300"}>
+      Gloves {ppeGloves ? "✅" : "❌"}
+    </span>
+  </div>
+</div>
 
             <p className="text-sm text-gray-400">
               {connected ? "HA 실시간 연동" : "HA 연결 대기"} · mmWave:{" "}
@@ -1627,17 +1795,32 @@ export default function App() {
                   </div>
 
                   <div className="flex items-center justify-between">
-                    <span>mmWave(ON + Target)</span>
-                    <span
-                      className={
-                        mmwaveEnabled && hasTarget
-                          ? "text-emerald-300"
-                          : "text-red-300"
-                      }
-                    >
-                      {mmwaveEnabled && hasTarget ? "✅ 통과" : "❌ 미통과"}
-                    </span>
-                  </div>
+                   <span>mmWave 생체값</span>
+
+                   <span
+                    className={
+                     hasTarget &&
+                     resp != null &&
+                     hr != null &&
+                     resp >= respMin &&
+                     resp <= respMax &&
+                     hr >= hrMin &&
+                     hr <= hrMax
+                     ? "text-emerald-300"
+                     : "text-red-300"
+                }
+              >
+                 {hasTarget &&
+                 resp != null &&
+                 hr != null &&
+                 resp >= respMin &&
+                 resp <= respMax &&
+                 hr >= hrMin &&
+                 hr <= hrMax
+                  ? "✅ 통과"
+                  : "❌ 미통과"}
+               </span>
+              </div>
 
                   <div className="flex items-center justify-between">
                     <span>Thermoeye(장치/스트림)</span>
@@ -1784,6 +1967,20 @@ export default function App() {
           <p className="mt-1 text-sm text-gray-500">
             맵의 위험 지점을 선택하면 상세 정보가 표시됩니다.
           </p>
+
+          <div className="mt-4 overflow-hidden rounded-[20px] border border-red-500/20 bg-black">
+           <div className="border-b border-white/10 px-4 py-2">
+            <p className="text-sm font-semibold text-red-300">
+            장애물 탐지 실시간 영상
+            </p>
+       </div>
+
+       <img
+       src="http://localhost:8080/stream?topic=/image_debug&type=mjpeg"
+       alt="Obstacle Detection"
+       className="h-[260px] w-full object-cover"
+       />
+    </div>
 
           {selectedHazard ? (
             <div className="mt-4 space-y-4">
@@ -2198,10 +2395,9 @@ export default function App() {
                     이동 표시
                   </ProductActionButton>
                   <ProductActionButton
-                    className="border-white/10 bg-[#1A1A1A] text-gray-200 hover:border-white/20 hover:bg-[#242424] hover:text-white"
-                    onClick={() => sendSirenPreset("off")}
+                    className="border-orange-500/20 bg-[#2A1B10] text-orange-200 hover:border-orange-500/40 hover:bg-[#382313] hover:text-orange-100"                    onClick={() => sendSirenPreset("off")}
                   >
-                    전체 정지
+                    소음 제어
                   </ProductActionButton>
                 </div>
 
@@ -2211,8 +2407,60 @@ export default function App() {
                     onClick={triggerConditionAlert}
                   >
                     컨디션 저조 테스트 팝업
-                  </Button>
-                </motion.div>
+</Button>
+</motion.div>
+
+{/* 🔊 SOUND 카드 추가 */}
+<div className="mt-3 rounded-[18px] border border-white/10 bg-[#101010] px-4 py-3">
+  <div className="flex items-center justify-between">
+    <div>
+      <p className="text-[11px] uppercase tracking-[0.18em] text-gray-500">
+        SOUND LEVEL
+      </p>
+      <p className="mt-1 text-xs text-gray-400">실시간 소음 센서</p>
+    </div>
+
+    <div
+      className={
+        soundValue == null
+          ? "text-gray-400"
+          : soundValue >= 85
+          ? "text-red-300"
+          : soundValue >= 75
+          ? "text-yellow-300"
+          : "text-emerald-300"
+      }
+    >
+      <span className="text-2xl font-bold">
+        {soundValue == null ? "--" : soundValue}
+      </span>
+    </div>
+  </div>
+
+  <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+    <div
+      className={
+        "h-full rounded-full transition-all " +
+        (soundValue == null
+          ? "bg-gray-500"
+          : soundValue >= 85
+          ? "bg-red-500"
+          : soundValue >= 75
+          ? "bg-yellow-400"
+          : "bg-emerald-500")
+      }
+      style={{
+        width: `${Math.min(100, Math.max(0, ((soundValue ?? 0) / 200) * 100))}%`,
+      }}
+    />
+  </div>
+
+  <p className="mt-2 text-[11px] text-gray-500">
+    {soundUpdatedAt == null
+      ? "대기 중"
+      : `업데이트 ${formatDateTime(soundUpdatedAt)}`}
+  </p>
+</div>
               </motion.section>
             </div>
 

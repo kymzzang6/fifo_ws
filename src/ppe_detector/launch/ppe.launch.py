@@ -13,7 +13,7 @@ def generate_launch_description():
     # Launch Arguments
     model_name_arg = DeclareLaunchArgument(
         'model_name',
-        default_value='yolo26s_model/origin3_addhand5',
+        default_value='/home/caps/fifo_ws/src/ppe_detector/models/yolo26s_model/merged6_addhand7',
         description='Folder name of the custom YOLO model'
     )
     
@@ -31,7 +31,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             # 경로 조립: base_dir + / + model_name + /weights/best.pt
-            'model_path': [base_model_dir, '/', LaunchConfiguration('model_name'), '/weights/best.engine'],
+            'model_path': [base_model_dir, '/', LaunchConfiguration('model_name'), '/best.engine'],
             'conf_thres': 0.75, # 신뢰도 임계값
             'device': 'cuda'   # GPU 강제
         }]

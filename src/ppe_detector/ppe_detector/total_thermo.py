@@ -23,7 +23,7 @@ class IntegratedPPENode(Node):
 
 
         # ========== 파라미터 선언 ==========
-        self.declare_parameter('ppe_model_path', '/home/caps/fifo_ws/src/ppe_detector/models/yolo26n_model/origin3_addhand4/weights/best.engine')
+        self.declare_parameter('ppe_model_path', '/home/caps/fifo_ws/src/ppe_detector/models/yolo26s_model/merged6_addhand7/best.engine')
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('iou_threshold', 0.5)
         self.declare_parameter('max_det', 10)
@@ -221,7 +221,7 @@ class IntegratedPPENode(Node):
 
         wearing_list = set()
         
-        # C++ 노드로 좌표 퍼블리시
+        # 좌표 퍼블리시
         self.publish_thermal_bbox(self.pub_face_bbox, body_boxes['head'])
  
         if is_human_detected and person_center_x >= 0 and person_center_y >= 0:

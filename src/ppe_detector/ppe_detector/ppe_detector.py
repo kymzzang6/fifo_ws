@@ -14,11 +14,11 @@ class PPEDetectorNode(Node):
         super().__init__('ppe_detector_node')
         
         # 파라미터 선언
-        self.declare_parameter('model_path', '/home/caps/fifo_ws/src/ppe_detector/models/yolo26n_model/origin3_addhand4/weights/best.pt')
+        self.declare_parameter('model_path', '/home/caps/fifo_ws/src/ppe_detector/models/yolo26s_model/merged6_addhand7/best.engine')
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('iou_threshold', 0.5)
         self.declare_parameter('max_det', 10)
-        self.declare_parameter('camera_id', 0)
+        self.declare_parameter('camera_id', 1)
         self.declare_parameter('frame_width', 640)
         self.declare_parameter('frame_height', 480)
         self.declare_parameter('timer_period', 0.033)  # 약 30Hz

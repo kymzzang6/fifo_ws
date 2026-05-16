@@ -5,3 +5,4 @@
 !**/models/**/
 !**/models/**/*.pt
 ui/node_modules/
+**/obstacle_detector/venv
